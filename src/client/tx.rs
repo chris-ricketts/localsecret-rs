@@ -86,7 +86,7 @@ impl super::Client {
         let code_hash = self.query_code_hash_by_code_id(code_id)?;
 
         println!("Encrypting init msg");
-        let encrypted_msg = self.encrypt_tx_msg(msg, code_hash.as_bytes(), account)?;
+        let encrypted_msg = self.encrypt_tx_msg(msg, &code_hash, account)?;
 
         let msg = MsgInstantiateContract {
             sender: account.id(),

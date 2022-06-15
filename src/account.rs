@@ -4,7 +4,10 @@ use cosmrs::{
 };
 use cosmwasm_std::HumanAddr;
 
-use crate::consts;
+use crate::{
+    consts,
+    crypto::{self, Key},
+};
 
 pub struct Account {
     prvk: bip32::XPrv,
@@ -42,10 +45,8 @@ impl Account {
             .expect("invalid public key type")
     }
 
-    pub(crate) fn prv_pub_bytes(&self) -> (Vec<u8>, Vec<u8>) {
-        let prv = self.prvk.private_key().to_bytes().to_vec();
-        let pubk = self.pubk.to_bytes();
-        (prv, pubk)
+    pub(crate) fn prv_pub_bytes(&self) -> (Key, Key) {
+        crypto::edd25519_keys(&self.prvk)
     }
 }
 

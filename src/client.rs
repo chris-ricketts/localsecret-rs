@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use cosmrs::rpc::{self, Client as RpcClient};
 use tokio::runtime::Runtime;
 
-use crate::{account::Account, consts, crypto, Error, Result};
+use crate::{account::Account, consts, crypto, CodeHash, Error, Result};
 
 // the client query impl
 mod query;
@@ -14,7 +14,7 @@ pub mod types;
 pub struct Client {
     rt: Runtime,
     rpc: rpc::HttpClient,
-    enclave_pubk: RefCell<Option<Vec<u8>>>,
+    enclave_pubk: RefCell<Option<crypto::Key>>,
 }
 
 impl Client {
@@ -44,16 +44,16 @@ impl Client {
         Ok(res.block.header.height.value() as _)
     }
 
-    fn enclave_public_key(&self) -> Result<Vec<u8>> {
+    fn enclave_public_key(&self) -> Result<crypto::Key> {
         if let Some(pubk) = self.enclave_pubk.borrow().as_ref() {
-            return Ok(pubk.clone());
+            return Ok(*pubk);
         }
 
         let key = self.query_tx_key()?;
 
         let pubk = crypto::cert::consenus_io_pubk(&key)?;
 
-        self.enclave_pubk.replace(Some(pubk.clone()));
+        self.enclave_pubk.replace(Some(pubk));
 
         Ok(pubk)
     }
@@ -61,11 +61,11 @@ impl Client {
     fn encrypt_tx_msg<M: serde::Serialize>(
         &self,
         msg: &M,
-        code_hash: &[u8],
+        code_hash: &CodeHash,
         account: &Account,
     ) -> Result<Vec<u8>> {
         let msg = serde_json::to_vec(msg).expect("msg cannot be serialized as JSON");
-        let plaintext = [code_hash, msg.as_slice()].concat();
+        let plaintext = [code_hash.to_hex_string().as_bytes(), msg.as_slice()].concat();
         let (prvk, pubk) = account.prv_pub_bytes();
         println!("Generating nonce...");
         let nonce = crypto::generate_nonce();
