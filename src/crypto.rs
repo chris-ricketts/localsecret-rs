@@ -14,6 +14,8 @@ pub enum CryptoError {
     IncorrectKeyLength,
     #[error("Encryption failed")]
     Encrypt,
+    #[error("Decryption failed")]
+    Decrypt,
 }
 
 pub fn edd25519_keys(secret: &bip32::XPrv) -> (Key, Key) {
@@ -23,7 +25,45 @@ pub fn edd25519_keys(secret: &bip32::XPrv) -> (Key, Key) {
     (secret.to_bytes(), public.to_bytes())
 }
 
-pub fn generate_nonce() -> Nonce {
+pub fn encrypt(
+    secret: &Key,
+    public: &Key,
+    peer: &Key,
+    plaintext: &[u8],
+) -> Result<(Nonce, Vec<u8>), CryptoError> {
+    let nonce = generate_nonce();
+
+    let shared_secret = encryption_key(secret, peer, &nonce)?;
+
+    let mut cipher = Siv::new(SivKey::from(shared_secret));
+
+    let ciphertext = cipher
+        .encrypt(&[[]], plaintext)
+        .map_err(|_| CryptoError::Encrypt)?;
+
+    let ciphertext = [nonce.as_slice(), public.as_slice(), &ciphertext].concat();
+
+    Ok((nonce, ciphertext))
+}
+
+pub fn decrypt(
+    secret: &Key,
+    peer: &Key,
+    nonce: &Nonce,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let shared_secret = encryption_key(secret, peer, &nonce)?;
+
+    let mut cipher = Siv::new(SivKey::from(shared_secret));
+
+    let plaintext = cipher
+        .decrypt(&[[]], ciphertext)
+        .map_err(|_| CryptoError::Decrypt)?;
+
+    Ok(plaintext)
+}
+
+fn generate_nonce() -> Nonce {
     use nanorand::rand::Rng;
     let mut nonce = [0; NONCE_LEN];
     let mut rng = nanorand::rand::ChaCha8::new();
@@ -31,56 +71,21 @@ pub fn generate_nonce() -> Nonce {
     nonce
 }
 
-pub fn encryption_key(secret: &Key, public: &Key, nonce: &Nonce) -> Result<Key, CryptoError> {
-    println!("secret key: {}", hex::encode(secret));
-    println!("public key: {}", hex::encode(public));
-    // initial key material
+fn encryption_key(secret: &Key, public: &Key, nonce: &Nonce) -> Result<Key, CryptoError> {
     let secret = x25519_dalek::StaticSecret::from(*secret);
+
     let public = x25519_dalek::PublicKey::from(*public);
+
     let shared = secret.diffie_hellman(&public);
-    println!("shared key: {}", hex::encode(shared.as_bytes()));
-    println!("nonce: {}", hex::encode(nonce));
 
     let ikm = &[shared.as_bytes(), nonce.as_slice()].concat();
-    println!("ikm:nonce: {}", hex::encode(ikm));
-    // perform key expansion
+
     let mut key = [0u8; KEY_LEN];
     hkdf::Hkdf::<sha2::Sha256>::new(Some(&HKDF_SALT), ikm)
         .expand(&[], &mut key)
         .map_err(|_| CryptoError::IncorrectKeyLength)?;
 
-    println!("encryption key: {}", hex::encode(&key));
-
     Ok(key)
-}
-
-pub fn encrypt(
-    secret: &Key,
-    public: &Key,
-    plaintext: &[u8],
-    nonce: &Nonce,
-) -> Result<Vec<u8>, CryptoError> {
-    let mut cipher = Siv::new(*SivKey::from_slice(secret));
-
-    let ciphertext = cipher
-        .encrypt(&[[]], plaintext)
-        .map_err(|_| CryptoError::Encrypt)?;
-
-    println!("nonce({}): {}", nonce.len(), hex::encode(nonce));
-    println!("public({}): {}", public.len(), hex::encode(public));
-    println!(
-        "ciphertext({}): {}",
-        ciphertext.len(),
-        hex::encode(&ciphertext)
-    );
-    let ciphertext = [nonce.as_slice(), public.as_slice(), &ciphertext].concat();
-    println!(
-        "nonce+public+ciphertext({}): {}",
-        ciphertext.len(),
-        hex::encode(&ciphertext)
-    );
-
-    Ok(ciphertext)
 }
 
 pub fn clone_into_key(slice: &[u8]) -> Key {

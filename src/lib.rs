@@ -5,8 +5,9 @@ pub(crate) mod crypto;
 
 mod docker;
 
+pub use account::{a, b, c, d, Account};
 pub use client::{
-    types::{CodeHash, CodeId, ContractInit, TxResponse},
+    types::{CodeHash, CodeId, Contract, TxResponse},
     Client,
 };
 pub use error::Error;
@@ -29,10 +30,11 @@ impl LocalSecret {
 }
 
 pub mod error {
-    pub use crate::client::types::ParseMsgResponseError;
+    pub use crate::client::types::ParseError;
     pub use crate::crypto::cert::MalformedError;
     pub use crate::crypto::CryptoError;
 
+    // TODO: Too many top level errors, kill dem
     #[derive(Debug, thiserror::Error)]
     pub enum Error {
         #[error("Failed to initialise tokio runtime: {0}")]
@@ -62,10 +64,16 @@ pub mod error {
         #[error("Broadcast error - deliver tx failed: {0}")]
         BroadcastTxDeliver(String),
         #[error("Failed to parse message response: {0}")]
-        ParseMsgResponse(#[from] ParseMsgResponseError),
+        ParseMsgResponse(#[from] ParseError),
         #[error("Parsing TEE cert failed: {0}")]
         ParseTEECert(#[from] MalformedError),
         #[error("Cryptographic error: {0}")]
         Crypto(#[from] CryptoError),
+        #[error("Failed to deserialise JSON response: {0}")]
+        Json(#[from] serde_json::Error),
+        #[error("Failed to decode Base64 response: {0}")]
+        Base64(#[from] base64::DecodeError),
+        #[error(transparent)]
+        Utf8(#[from] std::string::FromUtf8Error),
     }
 }

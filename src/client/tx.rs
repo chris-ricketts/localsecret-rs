@@ -6,44 +6,8 @@ use cosmrs::{
 };
 use prost::Message;
 
-use super::types::{FromMsgData, MsgDataExt};
-use crate::{
-    account::Account, client::types::Event, CodeId, ContractInit, Error, Result, TxResponse,
-};
-
-mod gas {
-    use cosmrs::tx::Fee;
-
-    use crate::consts;
-
-    fn uscrt(amount: u64) -> cosmrs::Coin {
-        let denom = consts::COIN_DENOM
-            .parse()
-            .expect("invalid coin denomination");
-
-        cosmrs::Coin {
-            denom,
-            amount: amount.into(),
-        }
-    }
-
-    fn fee(amount: u64, gas: u64) -> Fee {
-        Fee::from_amount_and_gas(uscrt(amount), gas)
-    }
-
-    pub fn upload() -> Fee {
-        fee(consts::UPLOAD_AMOUNT, consts::UPLOAD_GAS)
-    }
-
-    pub fn init() -> Fee {
-        fee(consts::INIT_AMOUNT, consts::INIT_GAS)
-    }
-
-    #[allow(dead_code)] // still need to do contract exec
-    pub fn exec() -> Fee {
-        fee(consts::EXEC_AMOUNT, consts::EXEC_GAS)
-    }
-}
+use super::types::ContractInit;
+use crate::{account::Account, client::types::Event, CodeId, Contract, Error, Result, TxResponse};
 
 impl super::Client {
     pub fn upload_contract<P: AsRef<Path>>(
@@ -72,10 +36,9 @@ impl super::Client {
         label: &str,
         code_id: CodeId,
         account: &Account,
-    ) -> Result<TxResponse<ContractInit>>
+    ) -> Result<TxResponse<Contract>>
     where
         M: serde::Serialize,
-        // R: serde::de::DeserializeOwned,
     {
         use cosmrs::secret_cosmwasm::MsgInstantiateContract;
 
@@ -85,8 +48,7 @@ impl super::Client {
 
         let code_hash = self.query_code_hash_by_code_id(code_id)?;
 
-        println!("Encrypting init msg");
-        let encrypted_msg = self.encrypt_tx_msg(msg, &code_hash, account)?;
+        let (_, encrypted_msg) = self.encrypt_tx_msg(msg, &code_hash, account)?;
 
         let msg = MsgInstantiateContract {
             sender: account.id(),
@@ -95,13 +57,44 @@ impl super::Client {
             init_msg: encrypted_msg,
         };
 
-        println!("Broadcasting instantiate msg");
         self.broadcast_msg(msg, account, gas::init())
+            .map(|tx: TxResponse<ContractInit>| tx.map(|c| c.into_contract(code_hash)))
     }
 
-    fn broadcast_msg<T, M>(&self, msg: M, account: &Account, gas: Fee) -> Result<TxResponse<T>>
+    pub fn exec_contract<M, R>(
+        &self,
+        msg: &M,
+        contract: &Contract,
+        account: &Account,
+    ) -> Result<TxResponse<R>>
     where
-        T: FromMsgData,
+        M: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        use cosmrs::secret_cosmwasm::MsgExecuteContract;
+
+        let (nonce, encrypted_msg) = self.encrypt_tx_msg(msg, contract.code_hash(), account)?;
+
+        let msg = MsgExecuteContract {
+            sender: account.id(),
+            contract: contract.id(),
+            msg: encrypted_msg,
+        };
+
+        self.broadcast_msg_raw(msg, account, gas::exec())
+            .and_then(|tx| tx.try_map(|cit| self.decrypt_response(&cit, &nonce, account)))
+            .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
+            .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
+            .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
+    }
+
+    fn broadcast_msg_raw<M>(
+        &self,
+        msg: M,
+        account: &Account,
+        gas: Fee,
+    ) -> Result<TxResponse<Vec<u8>>>
+    where
         M: Msg,
     {
         const HEIGHT_TIMEOUT_INTERVAL: u32 = 10;
@@ -129,12 +122,22 @@ impl super::Client {
 
         broadcast_tx_response(M::Proto::TYPE_URL, res)
     }
+
+    fn broadcast_msg<T, M>(&self, msg: M, account: &Account, gas: Fee) -> Result<TxResponse<T>>
+    where
+        T: TryFrom<Vec<u8>>,
+        crate::Error: From<T::Error>,
+        M: Msg,
+    {
+        self.broadcast_msg_raw(msg, account, gas)
+            .and_then(|tx| tx.try_map(T::try_from))
+    }
 }
 
-fn broadcast_tx_response<T>(msg_type: &str, bcast_res: BroadcastResponse) -> Result<TxResponse<T>>
-where
-    T: FromMsgData,
-{
+fn broadcast_tx_response(
+    msg_type: &str,
+    bcast_res: BroadcastResponse,
+) -> Result<TxResponse<Vec<u8>>> {
     if bcast_res.check_tx.code.is_err() {
         return Err(Error::BroadcastTxCheck(bcast_res.check_tx.log.to_string()));
     }
@@ -144,8 +147,6 @@ where
             bcast_res.deliver_tx.log.to_string(),
         ));
     }
-
-    println!("{bcast_res:#?}");
 
     let gas_used = bcast_res.deliver_tx.gas_used.into();
     let events = bcast_res
@@ -176,8 +177,7 @@ where
                 .into_iter()
                 .find(|msg| msg.msg_type == msg_type)
         })
-        .map(|msg| msg.parse())
-        .transpose()?;
+        .map(|msg| msg.data);
 
     Ok(TxResponse {
         response,
@@ -188,4 +188,37 @@ where
 
 fn chain_id() -> cosmrs::tendermint::chain::Id {
     crate::consts::CHAIN_ID.parse().expect("invalid chain id")
+}
+
+mod gas {
+    use cosmrs::tx::Fee;
+
+    use crate::consts;
+
+    fn uscrt(amount: u64) -> cosmrs::Coin {
+        let denom = consts::COIN_DENOM
+            .parse()
+            .expect("invalid coin denomination");
+
+        cosmrs::Coin {
+            denom,
+            amount: amount.into(),
+        }
+    }
+
+    fn fee(amount: u64, gas: u64) -> Fee {
+        Fee::from_amount_and_gas(uscrt(amount), gas)
+    }
+
+    pub fn upload() -> Fee {
+        fee(consts::UPLOAD_AMOUNT, consts::UPLOAD_GAS)
+    }
+
+    pub fn init() -> Fee {
+        fee(consts::INIT_AMOUNT, consts::INIT_GAS)
+    }
+
+    pub fn exec() -> Fee {
+        fee(consts::EXEC_AMOUNT, consts::EXEC_GAS)
+    }
 }

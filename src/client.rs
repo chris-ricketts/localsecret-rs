@@ -3,7 +3,12 @@ use std::cell::RefCell;
 use cosmrs::rpc::{self, Client as RpcClient};
 use tokio::runtime::Runtime;
 
-use crate::{account::Account, consts, crypto, CodeHash, Error, Result};
+use crate::{
+    account::Account,
+    consts,
+    crypto::{self, Nonce},
+    CodeHash, Error, Result,
+};
 
 // the client query impl
 mod query;
@@ -63,19 +68,25 @@ impl Client {
         msg: &M,
         code_hash: &CodeHash,
         account: &Account,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Nonce, Vec<u8>)> {
         let msg = serde_json::to_vec(msg).expect("msg cannot be serialized as JSON");
         let plaintext = [code_hash.to_hex_string().as_bytes(), msg.as_slice()].concat();
         let (prvk, pubk) = account.prv_pub_bytes();
-        println!("Generating nonce...");
-        let nonce = crypto::generate_nonce();
-        println!("Fetching enclave public key...");
-        let consensus_io_key = self.enclave_public_key()?;
-        println!("Generating tx encryption key...");
-        let encryption_key = crypto::encryption_key(&prvk, &consensus_io_key, &nonce)?;
-        println!("Encrypting plaintext...");
-        let ciphertext = crypto::encrypt(&encryption_key, &pubk, &plaintext, &nonce)?;
-        Ok(ciphertext)
+        let io_key = self.enclave_public_key()?;
+        let nonce_ciphertext = crypto::encrypt(&prvk, &pubk, &io_key, &plaintext)?;
+        Ok(nonce_ciphertext)
+    }
+
+    fn decrypt_response(
+        &self,
+        ciphertext: &[u8],
+        nonce: &Nonce,
+        account: &Account,
+    ) -> Result<Vec<u8>> {
+        let (prvk, _) = account.prv_pub_bytes();
+        let io_key = self.enclave_public_key()?;
+        let plaintext = crypto::decrypt(&prvk, &io_key, &nonce, ciphertext)?;
+        Ok(plaintext)
     }
 
     fn block_on<R, F>(&self, fut: F) -> R

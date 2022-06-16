@@ -1,26 +1,13 @@
 use std::collections::HashMap;
 
-pub(crate) trait FromMsgData: Sized {
-    type Error: Into<ParseMsgResponseError>;
+use cosmrs::AccountId;
 
-    fn try_from_msg_data(msg_data: &[u8]) -> Result<Self, Self::Error>;
-}
-
-pub(crate) trait MsgDataExt {
-    fn parse<T>(&self) -> Result<T, ParseMsgResponseError>
-    where
-        T: FromMsgData,
-        T::Error: Into<ParseMsgResponseError>;
-}
-
-impl MsgDataExt for cosmrs::proto::cosmos::base::abci::v1beta1::MsgData {
-    fn parse<T>(&self) -> Result<T, ParseMsgResponseError>
-    where
-        T: FromMsgData,
-        T::Error: Into<ParseMsgResponseError>,
-    {
-        T::try_from_msg_data(&self.data).map_err(T::Error::into)
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum ParseError {
+    #[error("Failed to parse code id: {0}")]
+    CodeId(#[from] ParseCodeIdError),
+    #[error("Failed to parse contract intitialisation: {0}")]
+    ContractInit(#[from] ParseContractInitError),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,35 +33,71 @@ pub enum ParseCodeIdError {
     ParseInt(#[from] std::num::ParseIntError),
 }
 
-impl FromMsgData for CodeId {
-    type Error = ParseCodeIdError;
+impl TryFrom<Vec<u8>> for CodeId {
+    type Error = ParseError;
 
-    fn try_from_msg_data(msg_data: &[u8]) -> Result<Self, Self::Error> {
-        let s = std::str::from_utf8(msg_data)?;
-        let code_id = s.parse()?;
-        Ok(CodeId(code_id))
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        fn parse(value: &[u8]) -> Result<CodeId, ParseCodeIdError> {
+            let s = std::str::from_utf8(value)?;
+            let code_id = s.parse()?;
+            Ok(CodeId(code_id))
+        }
+        parse(&value).map_err(Self::Error::from)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ContractInit;
+pub(crate) struct ContractInit(AccountId);
 
-// TODO: Stil working out how to parse from instantiate response
-impl FromMsgData for ContractInit {
-    type Error = ParseMsgResponseError;
-
-    fn try_from_msg_data(msg_data: &[u8]) -> Result<Self, Self::Error> {
-        println!("{:?}", msg_data);
-        Ok(ContractInit)
+impl ContractInit {
+    pub fn into_contract(self, code_hash: CodeHash) -> Contract {
+        Contract {
+            id: self.0,
+            code_hash,
+        }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ParseMsgResponseError {
-    #[error("Failed to parse code id: {0}")]
-    CodeId(#[from] ParseCodeIdError),
-    #[error("Failed to parse contract intitialisation")]
-    ContractInit,
+pub enum ParseContractInitError {
+    #[error("Failed to parse address bytes: {0}")]
+    Address(#[from] cosmrs::ErrorReport),
+}
+
+impl TryFrom<Vec<u8>> for ContractInit {
+    type Error = ParseError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        fn parse(value: &[u8]) -> Result<ContractInit, ParseContractInitError> {
+            let id = AccountId::new(crate::consts::CHAIN_PREFIX, &value)?;
+            Ok(ContractInit(id))
+        }
+        parse(&value).map_err(Self::Error::from)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Contract {
+    id: AccountId,
+    code_hash: CodeHash,
+}
+
+impl Contract {
+    pub fn human_address(&self) -> cosmwasm_std::HumanAddr {
+        self.id.to_string().into()
+    }
+
+    pub fn code_hash_string(&self) -> String {
+        self.code_hash.to_hex_string()
+    }
+
+    pub(crate) fn id(&self) -> AccountId {
+        self.id.clone()
+    }
+
+    pub(crate) fn code_hash(&self) -> &CodeHash {
+        &self.code_hash
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +155,27 @@ impl<T> TxResponse<T> {
     /// panics if the response is `None`
     pub fn into_inner(self) -> T {
         self.response.unwrap()
+    }
+
+    pub(crate) fn map<U, F: FnOnce(T) -> U>(self, f: F) -> TxResponse<U> {
+        TxResponse {
+            response: self.response.map(f),
+            gas_used: self.gas_used,
+            events: self.events,
+        }
+    }
+
+    pub(crate) fn try_map<U, E, F>(self, f: F) -> crate::Result<TxResponse<U>>
+    where
+        crate::Error: From<E>,
+        F: FnOnce(T) -> Result<U, E>,
+    {
+        let response = self.response.map(|t| f(t)).transpose()?;
+        Ok(TxResponse {
+            response,
+            gas_used: self.gas_used,
+            events: self.events,
+        })
     }
 }
 
