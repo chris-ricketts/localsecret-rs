@@ -34,6 +34,14 @@ fn test_contract() -> Result<()> {
 }
 ```
 
+## TODOs to get to v0.1.0
+
+- [ ] Rustdoc comments.
+- [ ] Expose options to speed up the block time before starting the docker container.
+- [ ] When launching a docker container, look for an unused port to bind to the container's RPC port (allows parallel testing).
+- [ ] Deserialize decrypted `cosmwasm_std::StdError` json when a TX delivery fails or contract returns an error.
+- [ ] Tidy up `TxResponse<ResponseMsg>` API so it's easier to access the response message (or `cosmwasm_std::StdError`).
+
 ## Testing
 
 You can see an example of a real contract being tested in: `tests/it.rs`
@@ -43,3 +51,11 @@ To run the tests:
 ❯ cargo install cargo-make // if you don't already have it
 ❯ cargo make test
 ```
+
+## Contributing 
+
+Issues and PRs are very welcome.
+
+Please try to follow the [Conventional Commit specification](https://www.conventionalcommits.org/en/v1.0.0/) for commit messages and PRs. 
+
+
