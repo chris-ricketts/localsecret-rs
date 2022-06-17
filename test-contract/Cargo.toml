@@ -1,0 +1,14 @@
+[package]
+name = "test_contract"
+authors = ["Chris Ricketts <chris_ricketts@proton_mail.com"]
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+doctest = false
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = "1.0"
+cosmwasm-std = { version = "=0.10.0", package = "secret-cosmwasm-std" }
+schemars = "0.7"

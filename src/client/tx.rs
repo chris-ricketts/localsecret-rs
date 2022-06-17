@@ -7,7 +7,10 @@ use cosmrs::{
 use prost::Message;
 
 use super::types::ContractInit;
-use crate::{account::Account, client::types::Event, CodeId, Contract, Error, Result, TxResponse};
+use crate::{
+    account::Account, client::types::Event, crypto::Decrypter, CodeId, Contract, Error, Result,
+    TxResponse,
+};
 
 impl super::Client {
     pub fn upload_contract<P: AsRef<Path>>(
@@ -48,7 +51,7 @@ impl super::Client {
 
         let code_hash = self.query_code_hash_by_code_id(code_id)?;
 
-        let (_, encrypted_msg) = self.encrypt_tx_msg(msg, &code_hash, account)?;
+        let (_, encrypted_msg) = self.encrypt_msg(msg, &code_hash, account)?;
 
         let msg = MsgInstantiateContract {
             sender: account.id(),
@@ -73,7 +76,7 @@ impl super::Client {
     {
         use cosmrs::secret_cosmwasm::MsgExecuteContract;
 
-        let (nonce, encrypted_msg) = self.encrypt_tx_msg(msg, contract.code_hash(), account)?;
+        let (nonce, encrypted_msg) = self.encrypt_msg(msg, contract.code_hash(), account)?;
 
         let msg = MsgExecuteContract {
             sender: account.id(),
@@ -81,8 +84,12 @@ impl super::Client {
             msg: encrypted_msg,
         };
 
+        let decrypter = self.decrypter(&nonce, account)?;
+
         self.broadcast_msg_raw(msg, account, gas::exec())
-            .and_then(|tx| tx.try_map(|cit| self.decrypt_response(&cit, &nonce, account)))
+            .map(|btr| btr.with_error_decrypt(decrypter))
+            .and_then(Result::from)
+            .and_then(|tx| tx.try_map(|cit| decrypter.decrypt(&cit)))
             .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
             .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
             .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
@@ -93,7 +100,7 @@ impl super::Client {
         msg: M,
         account: &Account,
         gas: Fee,
-    ) -> Result<TxResponse<Vec<u8>>>
+    ) -> Result<BroadcastTxResponse>
     where
         M: Msg,
     {
@@ -120,7 +127,7 @@ impl super::Client {
 
         let res = self.block_on(tx_raw.broadcast_commit(&self.rpc))?;
 
-        broadcast_tx_response(M::Proto::TYPE_URL, res)
+        Ok(broadcast_tx_response(M::Proto::TYPE_URL, res))
     }
 
     fn broadcast_msg<T, M>(&self, msg: M, account: &Account, gas: Fee) -> Result<TxResponse<T>>
@@ -130,22 +137,76 @@ impl super::Client {
         M: Msg,
     {
         self.broadcast_msg_raw(msg, account, gas)
+            .and_then(Result::from)
             .and_then(|tx| tx.try_map(T::try_from))
     }
 }
 
-fn broadcast_tx_response(
-    msg_type: &str,
-    bcast_res: BroadcastResponse,
-) -> Result<TxResponse<Vec<u8>>> {
+enum BroadcastTxResponse {
+    TxCheckError(String),
+    TxDeliverErrorPlain(String),
+    TxDeliverErrorEncrypted(String, Vec<u8>),
+    Delivered(TxResponse<Vec<u8>>),
+}
+
+impl BroadcastTxResponse {
+    fn into_result_with_decrypt(
+        self,
+        with_decrypt: Option<Decrypter>,
+    ) -> Result<TxResponse<Vec<u8>>> {
+        match self {
+            BroadcastTxResponse::TxCheckError(err) => Err(Error::BroadcastTxCheck(err)),
+            BroadcastTxResponse::TxDeliverErrorPlain(err) => Err(Error::BroadcastTxDeliver(err)),
+            BroadcastTxResponse::TxDeliverErrorEncrypted(log, ciphertext) => Err(with_decrypt
+                .map(|decrypter| decrypter.decrypt(&ciphertext))
+                .transpose()?
+                .map(|plaintext| String::from_utf8(plaintext))
+                .transpose()?
+                .map_or_else(|| Error::BroadcastTxDeliver(log), Error::BroadcastTxDeliver)),
+            BroadcastTxResponse::Delivered(tx_res) => Ok(tx_res),
+        }
+    }
+
+    fn with_error_decrypt<'a>(self, decrypt: Decrypter) -> WithErrorDecryption {
+        WithErrorDecryption { decrypt, btr: self }
+    }
+}
+
+impl From<BroadcastTxResponse> for Result<TxResponse<Vec<u8>>> {
+    fn from(btr: BroadcastTxResponse) -> Self {
+        btr.into_result_with_decrypt(None)
+    }
+}
+
+struct WithErrorDecryption {
+    decrypt: Decrypter,
+    btr: BroadcastTxResponse,
+}
+
+impl From<WithErrorDecryption> for Result<TxResponse<Vec<u8>>> {
+    fn from(wed: WithErrorDecryption) -> Self {
+        wed.btr.into_result_with_decrypt(Some(wed.decrypt))
+    }
+}
+
+fn try_extract_encrypted_error(log: &str) -> Option<Vec<u8>> {
+    log.split_once("encrypted:")
+        .and_then(|(_, rest)| rest.split_once(":"))
+        .and_then(|(b64, _)| base64::decode(b64.trim()).ok())
+}
+
+fn broadcast_tx_response(msg_type: &str, bcast_res: BroadcastResponse) -> BroadcastTxResponse {
     if bcast_res.check_tx.code.is_err() {
-        return Err(Error::BroadcastTxCheck(bcast_res.check_tx.log.to_string()));
+        return BroadcastTxResponse::TxCheckError(bcast_res.check_tx.log.to_string());
     }
 
     if bcast_res.deliver_tx.code.is_err() {
-        return Err(Error::BroadcastTxDeliver(
-            bcast_res.deliver_tx.log.to_string(),
-        ));
+        let log = bcast_res.deliver_tx.log.to_string();
+        return if let Some(ciphertext) = try_extract_encrypted_error(&log) {
+            BroadcastTxResponse::TxDeliverErrorEncrypted(log, ciphertext)
+        } else {
+            BroadcastTxResponse::TxDeliverErrorPlain(log)
+        };
     }
 
     let gas_used = bcast_res.deliver_tx.gas_used.into();
@@ -179,7 +240,7 @@ fn broadcast_tx_response(
         })
         .map(|msg| msg.data);
 
-    Ok(TxResponse {
+    BroadcastTxResponse::Delivered(TxResponse {
         response,
         gas_used,
         events,

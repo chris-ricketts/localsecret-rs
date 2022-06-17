@@ -1,7 +1,7 @@
 use cosmrs::rpc::{endpoint::abci_query::AbciQuery as QueryResponse, Client};
 use prost::Message;
 
-use crate::{account::Account, CodeHash, CodeId, Error, Result};
+use crate::{account::Account, CodeHash, CodeId, Contract, Error, Result};
 
 use super::types::AccountInfo;
 
@@ -33,6 +33,31 @@ impl super::Client {
             .and_then(try_decode_response::<QueryCodeResponse>)
             .and_then(|res| res.code_info.ok_or(Error::ContractInfoNotFound(code_id)))
             .map(|ci| CodeHash::from(ci.data_hash))
+    }
+
+    pub fn query_contract<M, R>(&self, msg: &M, contract: &Contract, from: &Account) -> Result<R>
+    where
+        M: serde::Serialize,
+        R: serde::de::DeserializeOwned,
+    {
+        use cosmrs::proto::cosmwasm::secret::compute::v1beta1::{
+            QuerySmartContractStateRequest, QuerySmartContractStateResponse,
+        };
+        let path = "/secret.compute.v1beta1.Query/SmartContractState";
+        let (nonce, encrypted) = self.encrypt_msg(&msg, &contract.code_hash(), from)?;
+        let msg = QuerySmartContractStateRequest {
+            address: contract.id().to_bytes(),
+            query_data: encrypted,
+        };
+
+        let decrypter = self.decrypter(&nonce, from)?;
+
+        self.query_with_msg(path, msg)
+            .and_then(try_decode_response::<QuerySmartContractStateResponse>)
+            .and_then(|res| decrypter.decrypt(&res.data).map_err(crate::Error::from))
+            .and_then(|plt| String::from_utf8(plt).map_err(crate::Error::from))
+            .and_then(|b46| base64::decode(b46).map_err(crate::Error::from))
+            .and_then(|buf| serde_json::from_slice(&buf).map_err(crate::Error::from))
     }
 
     pub(crate) fn query_account_info(&self, account: &Account) -> Result<AccountInfo> {

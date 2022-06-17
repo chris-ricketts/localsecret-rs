@@ -6,7 +6,7 @@ use tokio::runtime::Runtime;
 use crate::{
     account::Account,
     consts,
-    crypto::{self, Nonce},
+    crypto::{self, Decrypter, Nonce},
     CodeHash, Error, Result,
 };
 
@@ -63,7 +63,7 @@ impl Client {
         Ok(pubk)
     }
 
-    fn encrypt_tx_msg<M: serde::Serialize>(
+    fn encrypt_msg<M: serde::Serialize>(
         &self,
         msg: &M,
         code_hash: &CodeHash,
@@ -71,22 +71,20 @@ impl Client {
     ) -> Result<(Nonce, Vec<u8>)> {
         let msg = serde_json::to_vec(msg).expect("msg cannot be serialized as JSON");
         let plaintext = [code_hash.to_hex_string().as_bytes(), msg.as_slice()].concat();
+        self.encrypt_msg_raw(&plaintext, account)
+    }
+
+    fn encrypt_msg_raw(&self, msg: &[u8], account: &Account) -> Result<(Nonce, Vec<u8>)> {
         let (prvk, pubk) = account.prv_pub_bytes();
         let io_key = self.enclave_public_key()?;
-        let nonce_ciphertext = crypto::encrypt(&prvk, &pubk, &io_key, &plaintext)?;
+        let nonce_ciphertext = crypto::encrypt(&prvk, &pubk, &io_key, msg)?;
         Ok(nonce_ciphertext)
     }
 
-    fn decrypt_response(
-        &self,
-        ciphertext: &[u8],
-        nonce: &Nonce,
-        account: &Account,
-    ) -> Result<Vec<u8>> {
-        let (prvk, _) = account.prv_pub_bytes();
+    fn decrypter(&self, nonce: &Nonce, account: &Account) -> Result<Decrypter> {
+        let (secret, _) = account.prv_pub_bytes();
         let io_key = self.enclave_public_key()?;
-        let plaintext = crypto::decrypt(&prvk, &io_key, &nonce, ciphertext)?;
-        Ok(plaintext)
+        Ok(Decrypter::new(secret, io_key, *nonce))
     }
 
     fn block_on<R, F>(&self, fut: F) -> R

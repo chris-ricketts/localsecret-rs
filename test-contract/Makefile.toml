@@ -1,0 +1,32 @@
+[env]
+RAW_WASM_PATH = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-unknown-unknown/release/${CARGO_MAKE_PROJECT_NAME}.wasm"
+OPT_WASM_PATH = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-unknown-unknown/release/${CARGO_MAKE_PROJECT_NAME}.opt.wasm"
+GZ_WASM_PATH = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/${CARGO_MAKE_PROJECT_NAME}.wasm.gz"
+
+[tasks.build-release-wasm]
+env = { "RUSTFLAGS" = "-C link-arg=-s" }
+command = "cargo"
+args = ["build", "--release", "--target", "wasm32-unknown-unknown", "--locked"]
+
+[tasks.optimise-wasm]
+command = "wasm-opt"
+args = ["-Oz", "${RAW_WASM_PATH}", "-o", "${OPT_WASM_PATH}"]
+
+[tasks.compress-wasm]
+script_runner = "@shell"
+script = '''
+rm -f ${GZ_WASM_PATH}
+cat ${OPT_WASM_PATH} | gzip -n -9 > ${GZ_WASM_PATH}
+'''
+
+[tasks.build-release]
+clear = true
+dependencies = ["build-release-wasm", "optimise-wasm", "compress-wasm"]
+
+[tasks.build]
+clear = true
+dependencies = ["build-release"]
+
+[tasks.test]
+clear = true
+dependencies = ["build-release"]

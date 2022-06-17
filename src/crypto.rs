@@ -63,6 +63,27 @@ pub fn decrypt(
     Ok(plaintext)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Decrypter {
+    secret: Key,
+    peer: Key,
+    nonce: Nonce,
+}
+
+impl Decrypter {
+    pub fn new(secret: Key, peer: Key, nonce: Nonce) -> Self {
+        Decrypter {
+            secret,
+            peer,
+            nonce,
+        }
+    }
+
+    pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        decrypt(&self.secret, &self.peer, &self.nonce, ciphertext)
+    }
+}
+
 fn generate_nonce() -> Nonce {
     use nanorand::rand::Rng;
     let mut nonce = [0; NONCE_LEN];
