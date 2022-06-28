@@ -17,7 +17,7 @@ cosmrs = { git = "https://github.com/chris-ricketts/cosmos-rust", branch = "secr
   "dev",
 ] }
 bip39 = "1.0"
-bip32 = "0.3"
+bip32 = "0.4"
 tokio = { version = "1.19", features = ["rt"] }
 thiserror = "1.0.31"
 serde = "1.0"
