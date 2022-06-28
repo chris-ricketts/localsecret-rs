@@ -27,7 +27,8 @@ nanorand = "0.7.0"
 x25519-dalek = "1.2.0"
 hkdf = "0.12.3"
 sha2 = "0.10.2"
-aes-siv = "0.6.2"
+# TODO: use crates.io once 0.7 is published
+aes-siv = { git = "https://github.com/RustCrypto/AEADs" }
 hex = "0.4.3"
 
 [dev-dependencies]
