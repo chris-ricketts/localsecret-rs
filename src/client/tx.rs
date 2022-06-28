@@ -232,7 +232,7 @@ fn broadcast_tx_response(msg_type: &str, bcast_res: BroadcastResponse) -> Broadc
         .data
         .and_then(|data| {
             use cosmrs::proto::cosmos::base::abci::v1beta1::TxMsgData;
-            TxMsgData::decode(data.value().as_slice())
+            TxMsgData::decode(data.as_bytes())
                 .expect("unexpected data in response")
                 .data
                 .into_iter()
