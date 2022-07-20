@@ -13,7 +13,7 @@ use crate::{
 // the client query impl
 mod query;
 // the client tx impl
-mod tx;
+pub(crate) mod tx;
 pub mod types;
 
 pub struct Client {

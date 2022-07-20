@@ -3,6 +3,7 @@ use std::path::Path;
 use cosmrs::{
     rpc::endpoint::broadcast::tx_commit::Response as BroadcastResponse,
     tx::{Body, Fee, Msg, MsgProto, SignDoc, SignerInfo},
+    Coin,
 };
 use prost::Message;
 
@@ -12,87 +13,367 @@ use crate::{
     TxResponse,
 };
 
-impl super::Client {
-    pub fn upload_contract<P: AsRef<Path>>(
-        &self,
-        path: P,
-        account: &Account,
-    ) -> Result<TxResponse<CodeId>> {
-        use cosmrs::secret_cosmwasm::MsgStoreCode;
+pub mod builder {
+    use std::{
+        borrow::Cow,
+        marker::PhantomData,
+        path::{Path, PathBuf},
+    };
 
-        let wasm_byte_code = std::fs::read(&path)
-            .map_err(|err| Error::ContractFile(format!("{}", path.as_ref().display()), err))?;
+    use cosmrs::{tx::Fee, AccountId, Coin};
 
-        let msg = MsgStoreCode {
-            sender: account.id(),
-            wasm_byte_code,
-            source: None,
-            builder: None,
-        };
+    use crate::{
+        client::types::ContractInit, Account, CodeId, Contract, Error, Result, TxResponse,
+    };
 
-        self.broadcast_msg(msg, account, gas::upload())
+    pub type InitTx<'a> = Tx<'a, Unspecified, Unspecified>;
+
+    pub trait Broadcast {
+        type Response;
+
+        fn broadcast(self) -> Result<TxResponse<Self::Response>>;
     }
 
-    pub fn init_contract<M>(
-        &self,
-        msg: &M,
-        label: &str,
-        code_id: CodeId,
-        account: &Account,
-    ) -> Result<TxResponse<Contract>>
-    where
-        M: serde::Serialize,
-    {
-        use cosmrs::secret_cosmwasm::MsgInstantiateContract;
+    pub struct Unspecified;
 
-        if self.query_contract_label_exists(label)? {
-            return Err(Error::ContractLabelExists(label.to_owned()));
+    pub struct Upload {
+        path: PathBuf,
+    }
+
+    pub struct Initialize<M> {
+        msg: M,
+        code_id: CodeId,
+        label: Option<String>,
+    }
+
+    impl<M> Initialize<M> {
+        fn label(&self) -> String {
+            static UNNAMED_COUNT: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+
+            self.label.clone().unwrap_or_else(|| {
+                format!(
+                    "unnamed_{}",
+                    UNNAMED_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                )
+            })
+        }
+    }
+
+    pub struct Execute<M, R> {
+        msg: M,
+        contract: Contract,
+        sent_funds: Vec<Coin>,
+        _response: PhantomData<R>,
+    }
+
+    pub struct Tx<'a, Kind, From> {
+        client: &'a crate::Client,
+        kind: Kind,
+        from: From,
+        fee: Option<Fee>,
+    }
+
+    impl<'a, Kind, From> Tx<'a, Kind, From> {
+        pub fn gas_fee(mut self, amount: u64, gas: u64) -> Self {
+            let fee = super::gas::fee(amount, gas);
+            self.fee = Some(fee);
+            self
         }
 
-        let code_hash = self.query_code_hash_by_code_id(code_id)?;
-
-        let (_, encrypted_msg) = self.encrypt_msg(msg, &code_hash, account)?;
-
-        let msg = MsgInstantiateContract {
-            sender: account.id(),
-            code_id: code_id.into(),
-            label: label.to_string(),
-            init_msg: encrypted_msg,
-        };
-
-        self.broadcast_msg(msg, account, gas::init())
-            .map(|tx: TxResponse<ContractInit>| tx.map(|c| c.into_contract(code_hash)))
+        pub fn broadcast(self) -> Result<TxResponse<<Self as Broadcast>::Response>>
+        where
+            Self: Broadcast,
+        {
+            <Self as Broadcast>::broadcast(self)
+        }
     }
 
-    pub fn exec_contract<M, R>(
-        &self,
-        msg: &M,
-        contract: &Contract,
-        account: &Account,
-    ) -> Result<TxResponse<R>>
-    where
-        M: serde::Serialize,
-        R: serde::de::DeserializeOwned,
+    impl<'a, Kind> Tx<'a, Kind, Unspecified> {
+        pub fn from(self, from: &Account) -> Tx<'a, Kind, Account> {
+            Tx {
+                client: self.client,
+                kind: self.kind,
+                from: from.clone(),
+                fee: self.fee,
+            }
+        }
+    }
+
+    impl<'a, From> Tx<'a, Unspecified, From> {
+        pub fn upload<P: AsRef<Path>>(self, path: P) -> Tx<'a, Upload, From> {
+            Tx {
+                client: self.client,
+                kind: Upload {
+                    path: path.as_ref().to_path_buf(),
+                },
+                from: self.from,
+                fee: self.fee,
+            }
+        }
+
+        pub fn init<M: serde::Serialize>(
+            self,
+            msg: M,
+            code_id: CodeId,
+        ) -> Tx<'a, Initialize<M>, From> {
+            Tx {
+                client: self.client,
+                kind: Initialize {
+                    msg,
+                    code_id,
+                    label: None,
+                },
+                from: self.from,
+                fee: self.fee,
+            }
+        }
+
+        pub fn execute<M: serde::Serialize, R: serde::de::DeserializeOwned>(
+            self,
+            msg: M,
+            contract: &Contract,
+        ) -> Tx<'a, Execute<M, R>, From> {
+            Tx {
+                client: self.client,
+                kind: Execute {
+                    msg,
+                    contract: contract.clone(),
+                    sent_funds: vec![],
+                    _response: PhantomData,
+                },
+                from: self.from,
+                fee: self.fee,
+            }
+        }
+    }
+
+    impl<'a, M, From> Tx<'a, Initialize<M>, From> {
+        pub fn label(mut self, label: impl Into<String>) -> Self {
+            self.kind.label = Some(label.into());
+            self
+        }
+    }
+
+    impl<'a, M, R, From> Tx<'a, Execute<M, R>, From> {
+        pub fn send_uscrt(mut self, amount: u64) -> Self {
+            if let Some(coin) = self.kind.sent_funds.first_mut() {
+                coin.amount += amount.into();
+                return self;
+            }
+
+            let coin = Coin {
+                denom: "uscrt".parse().expect("safe: correct denom"),
+                amount: amount.into(),
+            };
+
+            self.kind.sent_funds.push(coin);
+            self
+        }
+    }
+
+    impl<'a> Broadcast for Tx<'a, Upload, Account> {
+        type Response = CodeId;
+
+        fn broadcast(self) -> Result<TxResponse<Self::Response>> {
+            let Tx {
+                client,
+                from,
+                fee,
+                kind,
+            } = self;
+
+            use cosmrs::secret_cosmwasm::MsgStoreCode;
+
+            let wasm_byte_code = std::fs::read(&kind.path)
+                .map_err(|err| Error::ContractFile(format!("{}", kind.path.display()), err))?;
+
+            let msg = MsgStoreCode {
+                sender: from.id(),
+                wasm_byte_code,
+                source: None,
+                builder: None,
+            };
+
+            let gas = fee.unwrap_or_else(|| super::gas::upload());
+
+            client.broadcast_msg(msg, &from, gas)
+        }
+    }
+
+    impl<'a, M: serde::Serialize> Broadcast for Tx<'a, Initialize<M>, Account> {
+        type Response = Contract;
+
+        fn broadcast(self) -> Result<TxResponse<Self::Response>> {
+            let Tx {
+                client,
+                kind,
+                from,
+                fee,
+            } = self;
+
+            use cosmrs::secret_cosmwasm::MsgInstantiateContract;
+
+            let label = kind.label();
+
+            if client.query_contract_label_exists(&label)? {
+                return Err(Error::ContractLabelExists(label));
+            }
+
+            let code_hash = client.query_code_hash_by_code_id(kind.code_id)?;
+
+            let (_, encrypted_msg) = client.encrypt_msg(&kind.msg, &code_hash, &from)?;
+
+            let msg = MsgInstantiateContract {
+                sender: from.id(),
+                code_id: kind.code_id.into(),
+                label,
+                init_msg: encrypted_msg,
+            };
+
+            let gas = fee.unwrap_or_else(|| super::gas::init());
+
+            client
+                .broadcast_msg(msg, &from, gas)
+                .map(|tx: TxResponse<ContractInit>| tx.map(|c| c.into_contract(code_hash)))
+        }
+    }
+
+    impl<'a, M: serde::Serialize, R: serde::de::DeserializeOwned> Broadcast
+        for Tx<'a, Execute<M, R>, Account>
     {
-        use cosmrs::secret_cosmwasm::MsgExecuteContract;
+        type Response = R;
 
-        let (nonce, encrypted_msg) = self.encrypt_msg(msg, contract.code_hash(), account)?;
+        fn broadcast(self) -> Result<TxResponse<Self::Response>> {
+            let Tx {
+                client,
+                kind,
+                from,
+                fee,
+            } = self;
 
-        let msg = MsgExecuteContract {
-            sender: account.id(),
-            contract: contract.id(),
-            msg: encrypted_msg,
-        };
+            use cosmrs::secret_cosmwasm::MsgExecuteContract;
 
-        let decrypter = self.decrypter(&nonce, account)?;
+            let (nonce, encrypted_msg) =
+                client.encrypt_msg(&kind.msg, kind.contract.code_hash(), &from)?;
 
-        self.broadcast_msg_raw(msg, account, gas::exec())
-            .map(|btr| btr.with_error_decrypt(decrypter))
-            .and_then(Result::from)
-            .and_then(|tx| tx.try_map(|cit| decrypter.decrypt(&cit)))
-            .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
-            .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
-            .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
+            let msg = MsgExecuteContract {
+                sender: from.id(),
+                contract: kind.contract.id(),
+                msg: encrypted_msg,
+                sent_funds: kind.sent_funds,
+            };
+
+            let decrypter = client.decrypter(&nonce, &from)?;
+
+            let gas = fee.unwrap_or_else(|| super::gas::exec());
+
+            client
+                .broadcast_msg_raw(msg, &from, gas)
+                .map(|btr| btr.with_error_decrypt(decrypter))
+                .and_then(Result::from)
+                .and_then(|tx| tx.try_map(|cit| decrypter.decrypt(&cit)))
+                .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
+                .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
+                .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
+        }
+    }
+
+    pub(crate) fn new(client: &crate::Client) -> Tx<'_, Unspecified, Unspecified> {
+        Tx {
+            client,
+            kind: Unspecified,
+            from: Unspecified,
+            fee: None,
+        }
+    }
+}
+
+impl super::Client {
+    //pub fn upload_contract<P: AsRef<Path>>(
+    //    &self,
+    //    path: P,
+    //    account: &Account,
+    //) -> Result<TxResponse<CodeId>> {
+    //    use cosmrs::secret_cosmwasm::MsgStoreCode;
+
+    //    let wasm_byte_code = std::fs::read(&path)
+    //        .map_err(|err| Error::ContractFile(format!("{}", path.as_ref().display()), err))?;
+
+    //    let msg = MsgStoreCode {
+    //        sender: account.id(),
+    //        wasm_byte_code,
+    //        source: None,
+    //        builder: None,
+    //    };
+
+    //    self.broadcast_msg(msg, account, gas::upload())
+    //}
+
+    //pub fn init_contract<M>(
+    //    &self,
+    //    msg: &M,
+    //    label: &str,
+    //    code_id: CodeId,
+    //    account: &Account,
+    //) -> Result<TxResponse<Contract>>
+    //where
+    //    M: serde::Serialize,
+    //{
+    //    use cosmrs::secret_cosmwasm::MsgInstantiateContract;
+
+    //    if self.query_contract_label_exists(label)? {
+    //        return Err(Error::ContractLabelExists(label.to_owned()));
+    //    }
+
+    //    let code_hash = self.query_code_hash_by_code_id(code_id)?;
+
+    //    let (_, encrypted_msg) = self.encrypt_msg(msg, &code_hash, account)?;
+
+    //    let msg = MsgInstantiateContract {
+    //        sender: account.id(),
+    //        code_id: code_id.into(),
+    //        label: label.to_string(),
+    //        init_msg: encrypted_msg,
+    //    };
+
+    //    self.broadcast_msg(msg, account, gas::init())
+    //        .map(|tx: TxResponse<ContractInit>| tx.map(|c| c.into_contract(code_hash)))
+    //}
+
+    //pub fn exec_contract<M, R>(
+    //    &self,
+    //    msg: &M,
+    //    contract: &Contract,
+    //    account: &Account,
+    //) -> Result<TxResponse<R>>
+    //where
+    //    M: serde::Serialize,
+    //    R: serde::de::DeserializeOwned,
+    //{
+    //    use cosmrs::secret_cosmwasm::MsgExecuteContract;
+
+    //    let (nonce, encrypted_msg) = self.encrypt_msg(msg, contract.code_hash(), account)?;
+
+    //    let msg = MsgExecuteContract {
+    //        sender: account.id(),
+    //        contract: contract.id(),
+    //        msg: encrypted_msg,
+    //    };
+
+    //    let decrypter = self.decrypter(&nonce, account)?;
+
+    //    self.broadcast_msg_raw(msg, account, gas::exec())
+    //        .map(|btr| btr.with_error_decrypt(decrypter))
+    //        .and_then(Result::from)
+    //        .and_then(|tx| tx.try_map(|cit| decrypter.decrypt(&cit)))
+    //        .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
+    //        .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
+    //        .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
+    //}
+
+    pub fn tx(&self) -> builder::InitTx<'_> {
+        builder::new(self)
     }
 
     fn broadcast_msg_raw<M>(
@@ -267,7 +548,7 @@ mod gas {
         }
     }
 
-    fn fee(amount: u64, gas: u64) -> Fee {
+    pub fn fee(amount: u64, gas: u64) -> Fee {
         Fee::from_amount_and_gas(uscrt(amount), gas)
     }
 

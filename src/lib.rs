@@ -7,6 +7,7 @@ mod docker;
 
 pub use account::{a, b, c, d, Account};
 pub use client::{
+    tx::builder::*,
     types::{CodeHash, CodeId, Contract, TxResponse},
     Client,
 };

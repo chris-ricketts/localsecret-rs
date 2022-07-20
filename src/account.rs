@@ -9,6 +9,7 @@ use crate::{
     crypto::{self, Key},
 };
 
+#[derive(Clone)]
 pub struct Account {
     prvk: bip32::XPrv,
     pubk: PublicKey,

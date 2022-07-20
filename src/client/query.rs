@@ -6,11 +6,11 @@ use crate::{account::Account, CodeHash, CodeId, Contract, Error, Result};
 use super::types::AccountInfo;
 
 impl super::Client {
-    pub fn query_uscrt_balance(&self, account: &Account) -> Result<cosmwasm_std::Uint128> {
+    pub fn query_uscrt_balance(&self, wallet: &str) -> Result<cosmwasm_std::Uint128> {
         use cosmrs::proto::cosmos::bank::v1beta1::{QueryBalanceRequest, QueryBalanceResponse};
         let path = "/cosmos.bank.v1beta1.Query/Balance";
         let msg = QueryBalanceRequest {
-            address: account.id().to_string(),
+            address: wallet.to_string(),
             denom: "uscrt".to_owned(),
         };
         self.query_with_msg(path, msg)
