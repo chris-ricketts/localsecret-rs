@@ -82,6 +82,7 @@ impl super::Client {
             sender: account.id(),
             contract: contract.id(),
             msg: encrypted_msg,
+            sent_funds: vec![],
         };
 
         let decrypter = self.decrypter(&nonce, account)?;

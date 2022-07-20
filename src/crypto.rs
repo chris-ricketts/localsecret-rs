@@ -1,4 +1,4 @@
-use aes_siv::{siv::Aes128Siv as Siv, Key as SivKey};
+use aes_siv::{siv::Aes128Siv as Siv, Key as SivKey, KeyInit};
 
 pub mod cert;
 
@@ -35,7 +35,7 @@ pub fn encrypt(
 
     let shared_secret = encryption_key(secret, peer, &nonce)?;
 
-    let mut cipher = Siv::new(SivKey::from(shared_secret));
+    let mut cipher = Siv::new(&SivKey::<Siv>::from(shared_secret));
 
     let ciphertext = cipher
         .encrypt(&[[]], plaintext)
@@ -54,7 +54,7 @@ pub fn decrypt(
 ) -> Result<Vec<u8>, CryptoError> {
     let shared_secret = encryption_key(secret, peer, &nonce)?;
 
-    let mut cipher = Siv::new(SivKey::from(shared_secret));
+    let mut cipher = Siv::new(&SivKey::<Siv>::from(shared_secret));
 
     let plaintext = cipher
         .decrypt(&[[]], ciphertext)
