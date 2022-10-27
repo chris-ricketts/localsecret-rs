@@ -7,18 +7,22 @@ fn test_contract_session(client: &localsecret::Client) -> localsecret::Result<()
     let a = localsecret::a();
 
     let code_id = client
-        .upload_contract("target/test_contract.wasm.gz", &a)?
+        .tx()
+        .upload("target/test_contract.wasm.gz")
+        .from(&a)
+        .broadcast()?
         .into_inner();
 
     let contract = client
-        .init_contract(
+        .tx()
+        .init(
             &test_contract::InitMsg {
                 greeting: "YO".to_string(),
             },
-            "test_contract",
             code_id,
-            &a,
-        )?
+        )
+        .from(&a)
+        .broadcast()?
         .into_inner();
 
     let greeting: test_contract::QueryAnswer = client.query_contract(
@@ -35,13 +39,15 @@ fn test_contract_session(client: &localsecret::Client) -> localsecret::Result<()
     );
 
     let answer: test_contract::HandleAnswer = client
-        .exec_contract(
+        .tx()
+        .execute(
             &test_contract::HandleMsg::ModifyGreeting {
                 greeting: "Hola".to_string(),
             },
             &contract,
-            &a,
-        )?
+        )
+        .from(&a)
+        .broadcast()?
         .into_inner();
 
     assert_eq!(
