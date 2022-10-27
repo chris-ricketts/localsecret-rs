@@ -15,18 +15,53 @@ pub use error::Error;
 
 pub type Result<T> = std::result::Result<T, error::Error>;
 
-pub struct LocalSecret;
+pub struct LocalSecret {
+    spawn_docker: bool,
+    rpc_host: String,
+    rpc_port: u16,
+}
 
 pub fn env() -> LocalSecret {
-    LocalSecret
+    LocalSecret {
+        spawn_docker: true,
+        rpc_host: consts::DEFAULT_RPC_HOST.to_owned(),
+        rpc_port: consts::DEFAULT_RPC_PORT,
+    }
 }
 
 impl LocalSecret {
+    /// Specify whether to connect to an external localsecret instead.
+    /// If false, the client will attempt to connect to an extern RPC server. Default: true
+    pub fn external(mut self) -> Self {
+        self.spawn_docker = false;
+        self
+    }
+
+    /// Specify an external RPC server host to connect to.
+    /// Default: localhost
+    pub fn external_rpc_host(mut self, rpc_host: impl Into<String>) -> Self {
+        self.rpc_host = rpc_host.into();
+        self
+    }
+
+    /// Specify an external RPC server port to connect to.
+    /// Default: 26657
+    pub fn external_rpc_port(mut self, rpc_port: u16) -> Self {
+        self.rpc_port = rpc_port;
+        self
+    }
+
+    /// (Conditionally) Spawn a docker container, connect the RPC client and pass it to the session function.
     pub fn run<F>(&self, f: F) -> Result<()>
     where
         F: FnOnce(&Client) -> Result<()> + std::panic::UnwindSafe,
     {
-        docker::docker_run(f)
+        if self.spawn_docker {
+            docker::docker_run(f)
+        } else {
+            let client = Client::init(&self.rpc_host, self.rpc_port)?;
+            f(&client)
+        }
     }
 }
 

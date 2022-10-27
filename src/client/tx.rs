@@ -1,26 +1,18 @@
-use std::path::Path;
-
 use cosmrs::{
     rpc::endpoint::broadcast::tx_commit::Response as BroadcastResponse,
     tx::{Body, Fee, Msg, MsgProto, SignDoc, SignerInfo},
-    Coin,
 };
 use prost::Message;
 
-use super::types::ContractInit;
-use crate::{
-    account::Account, client::types::Event, crypto::Decrypter, CodeId, Contract, Error, Result,
-    TxResponse,
-};
+use crate::{account::Account, client::types::Event, crypto::Decrypter, Error, Result, TxResponse};
 
 pub mod builder {
     use std::{
-        borrow::Cow,
         marker::PhantomData,
         path::{Path, PathBuf},
     };
 
-    use cosmrs::{tx::Fee, AccountId, Coin};
+    use cosmrs::{tx::Fee, Coin};
 
     use crate::{
         client::types::ContractInit, Account, CodeId, Contract, Error, Result, TxResponse,
@@ -252,11 +244,10 @@ pub mod builder {
                 fee,
             } = self;
 
-            use cosmrs::secret_cosmwasm::MsgExecuteContract;
-
             let (nonce, encrypted_msg) =
                 client.encrypt_msg(&kind.msg, kind.contract.code_hash(), &from)?;
 
+            use cosmrs::secret_cosmwasm::MsgExecuteContract;
             let msg = MsgExecuteContract {
                 sender: from.id(),
                 contract: kind.contract.id(),
@@ -290,88 +281,6 @@ pub mod builder {
 }
 
 impl super::Client {
-    //pub fn upload_contract<P: AsRef<Path>>(
-    //    &self,
-    //    path: P,
-    //    account: &Account,
-    //) -> Result<TxResponse<CodeId>> {
-    //    use cosmrs::secret_cosmwasm::MsgStoreCode;
-
-    //    let wasm_byte_code = std::fs::read(&path)
-    //        .map_err(|err| Error::ContractFile(format!("{}", path.as_ref().display()), err))?;
-
-    //    let msg = MsgStoreCode {
-    //        sender: account.id(),
-    //        wasm_byte_code,
-    //        source: None,
-    //        builder: None,
-    //    };
-
-    //    self.broadcast_msg(msg, account, gas::upload())
-    //}
-
-    //pub fn init_contract<M>(
-    //    &self,
-    //    msg: &M,
-    //    label: &str,
-    //    code_id: CodeId,
-    //    account: &Account,
-    //) -> Result<TxResponse<Contract>>
-    //where
-    //    M: serde::Serialize,
-    //{
-    //    use cosmrs::secret_cosmwasm::MsgInstantiateContract;
-
-    //    if self.query_contract_label_exists(label)? {
-    //        return Err(Error::ContractLabelExists(label.to_owned()));
-    //    }
-
-    //    let code_hash = self.query_code_hash_by_code_id(code_id)?;
-
-    //    let (_, encrypted_msg) = self.encrypt_msg(msg, &code_hash, account)?;
-
-    //    let msg = MsgInstantiateContract {
-    //        sender: account.id(),
-    //        code_id: code_id.into(),
-    //        label: label.to_string(),
-    //        init_msg: encrypted_msg,
-    //    };
-
-    //    self.broadcast_msg(msg, account, gas::init())
-    //        .map(|tx: TxResponse<ContractInit>| tx.map(|c| c.into_contract(code_hash)))
-    //}
-
-    //pub fn exec_contract<M, R>(
-    //    &self,
-    //    msg: &M,
-    //    contract: &Contract,
-    //    account: &Account,
-    //) -> Result<TxResponse<R>>
-    //where
-    //    M: serde::Serialize,
-    //    R: serde::de::DeserializeOwned,
-    //{
-    //    use cosmrs::secret_cosmwasm::MsgExecuteContract;
-
-    //    let (nonce, encrypted_msg) = self.encrypt_msg(msg, contract.code_hash(), account)?;
-
-    //    let msg = MsgExecuteContract {
-    //        sender: account.id(),
-    //        contract: contract.id(),
-    //        msg: encrypted_msg,
-    //    };
-
-    //    let decrypter = self.decrypter(&nonce, account)?;
-
-    //    self.broadcast_msg_raw(msg, account, gas::exec())
-    //        .map(|btr| btr.with_error_decrypt(decrypter))
-    //        .and_then(Result::from)
-    //        .and_then(|tx| tx.try_map(|cit| decrypter.decrypt(&cit)))
-    //        .and_then(|tx| tx.try_map(|plt| String::from_utf8(plt)))
-    //        .and_then(|tx| tx.try_map(|b64| base64::decode(b64)))
-    //        .and_then(|tx| tx.try_map(|buf| serde_json::from_slice(&buf)))
-    //}
-
     pub fn tx(&self) -> builder::InitTx<'_> {
         builder::new(self)
     }

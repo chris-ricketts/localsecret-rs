@@ -5,7 +5,6 @@ use tokio::runtime::Runtime;
 
 use crate::{
     account::Account,
-    consts,
     crypto::{self, Decrypter, Nonce},
     CodeHash, Error, Result,
 };
@@ -23,13 +22,13 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn init() -> Result<Client> {
+    pub(crate) fn init(rpc_host: &str, rpc_port: u16) -> Result<Client> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(Error::Runtime)?;
 
-        let rpc_url = format!("{}:{}", consts::RPC_URL, consts::RPC_PORT);
+        let rpc_url = format!("http://{}:{}", rpc_host, rpc_port);
         let rpc = rpc::HttpClient::new(rpc_url.as_str())?;
         let enclave_pubk = RefCell::default();
 
