@@ -11,15 +11,30 @@ fn test_contract() -> Result<()> {
         // access genesis accounts
         let a = localsecret::a();
 
-        let code_id = client.upload_contract("target/your_contract.wasm.gz", &a)?.into_inner();
+        let code_id = client
+            .tx()
+            .upload("target/test_contract.wasm.gz")
+            .from(&a)
+            .broadcast()?
+            .into_inner();
 
         let init_msg = your_contract::InitMsg { .. };
 
-        let contract = client.init_contract(&init_msg, "your_contract", &code_id, &a)?.into_inner();
+        let contract = client
+            .tx()
+            .init(&init_msg, code_id)
+            .from(&a)
+            .broadcast()?
+            .into_inner();
 
         let handle_msg = your_contract::HandleMsg::Foo { .. };
 
-        let handle_ans = client.exec_contract(handle_msg, &contract, &a)?.into_inner();
+        let handle_ans = client
+            .tx()
+            .execute(&handle_msg, &contract)
+            .from(&a)
+            .broadcast()?
+            .into_inner();
 
         assert_eq!(handle_ans.foo, ...);
 
