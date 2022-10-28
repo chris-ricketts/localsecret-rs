@@ -1,3 +1,8 @@
+![Royston Vasey](rv.jpg)
+
+> Are you local? No?! This is a local crate, for local development; there's nothing for you here!  
+> -- [Tubbs Tattsyrup, League of Gentleman](https://youtu.be/F75d01l5AxM).
+
 # localsecret-rs: Rust x LocalSecret docker
 
 This crate provides a convenient way to test contracts in the LocalSecret docker container:
