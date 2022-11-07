@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use cosmrs::AccountId;
 
@@ -6,6 +6,10 @@ use cosmrs::AccountId;
 pub enum ParseError {
     #[error("Failed to parse code id: {0}")]
     CodeId(#[from] ParseCodeIdError),
+    #[error("Failed to parse code hash: {0}")]
+    CodeHash(#[from] hex::FromHexError),
+    #[error("Failed to parse contract address: {0}")]
+    ContractAddress(#[from] cosmrs::ErrorReport),
     #[error("Failed to parse contract intitialisation: {0}")]
     ContractInit(#[from] ParseContractInitError),
 }
@@ -83,6 +87,14 @@ pub struct Contract {
 }
 
 impl Contract {
+    pub fn try_from_address_with_code_hash(
+        address: &str,
+        code_hash: &str,
+    ) -> Result<Contract, ParseError> {
+        let id = AccountId::from_str(address)?;
+        let code_hash = CodeHash::from_str(code_hash)?;
+        Ok(Contract { id, code_hash })
+    }
     pub fn human_address(&self) -> cosmwasm_std::HumanAddr {
         self.id.to_string().into()
     }
@@ -106,6 +118,14 @@ pub struct CodeHash(Vec<u8>);
 impl From<Vec<u8>> for CodeHash {
     fn from(b: Vec<u8>) -> Self {
         CodeHash(b)
+    }
+}
+
+impl FromStr for CodeHash {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        hex::decode(s).map(CodeHash).map_err(ParseError::from)
     }
 }
 

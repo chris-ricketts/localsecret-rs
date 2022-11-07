@@ -14,7 +14,7 @@ where
     ];
 
     cosmrs::dev::docker_run(docker_args, || {
-        let client = Client::init(consts::DEFAULT_RPC_HOST, consts::DEFAULT_RPC_PORT)?;
+        let client = Client::init(consts::DEFAULT_RPC_HOST, consts::DEFAULT_RPC_PORT, None)?;
         client.wait_for_first_block()?;
         f(&client)
     })

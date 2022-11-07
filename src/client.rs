@@ -22,15 +22,19 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn init(rpc_host: &str, rpc_port: u16) -> Result<Client> {
+    pub(crate) fn init(
+        rpc_host: &str,
+        rpc_port: u16,
+        enclave_key: Option<crypto::Key>,
+    ) -> Result<Client> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .map_err(Error::Runtime)?;
 
-        let rpc_url = format!("http://{}:{}", rpc_host, rpc_port);
+        let rpc_url = format!("{}:{}", rpc_host, rpc_port);
         let rpc = rpc::HttpClient::new(rpc_url.as_str())?;
-        let enclave_pubk = RefCell::default();
+        let enclave_pubk = RefCell::new(enclave_key);
 
         Ok(Client {
             rt,

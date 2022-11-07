@@ -17,6 +17,7 @@ pub type Result<T> = std::result::Result<T, error::Error>;
 
 pub struct LocalSecret {
     spawn_docker: bool,
+    enclave_key: Option<String>,
     rpc_host: String,
     rpc_port: u16,
 }
@@ -24,6 +25,7 @@ pub struct LocalSecret {
 pub fn env() -> LocalSecret {
     LocalSecret {
         spawn_docker: true,
+        enclave_key: None,
         rpc_host: consts::DEFAULT_RPC_HOST.to_owned(),
         rpc_port: consts::DEFAULT_RPC_PORT,
     }
@@ -51,6 +53,11 @@ impl LocalSecret {
         self
     }
 
+    pub fn enclave_key_hex(mut self, enclave_key: impl Into<String>) -> Self {
+        self.enclave_key = Some(enclave_key.into());
+        self
+    }
+
     /// (Conditionally) Spawn a docker container, connect the RPC client and pass it to the session function.
     pub fn run<F>(&self, f: F) -> Result<()>
     where
@@ -59,7 +66,14 @@ impl LocalSecret {
         if self.spawn_docker {
             docker::docker_run(f)
         } else {
-            let client = Client::init(&self.rpc_host, self.rpc_port)?;
+            let enclave_key = self
+                .enclave_key
+                .as_ref()
+                .map(|hk| hex::decode(hk))
+                .transpose()?
+                .map(|v| crypto::clone_into_key(&v));
+
+            let client = Client::init(&self.rpc_host, self.rpc_port, enclave_key)?;
             f(&client)
         }
     }
@@ -111,5 +125,7 @@ pub mod error {
         Base64(#[from] base64::DecodeError),
         #[error(transparent)]
         Utf8(#[from] std::string::FromUtf8Error),
+        #[error(transparent)]
+        ParseHex(#[from] hex::FromHexError),
     }
 }

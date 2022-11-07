@@ -43,10 +43,10 @@ impl super::Client {
         use cosmrs::proto::cosmwasm::secret::compute::v1beta1::{
             QuerySmartContractStateRequest, QuerySmartContractStateResponse,
         };
-        let path = "/secret.compute.v1beta1.Query/SmartContractState";
+        let path = "/secret.compute.v1beta1.Query/QuerySecretContract";
         let (nonce, encrypted) = self.encrypt_msg(&msg, &contract.code_hash(), from)?;
         let msg = QuerySmartContractStateRequest {
-            address: contract.id().to_bytes(),
+            address: contract.id().to_string(),
             query_data: encrypted,
         };
 
@@ -101,6 +101,7 @@ impl super::Client {
 
     fn query(&self, path: &str, data: Vec<u8>) -> Result<QueryResponse> {
         let path = path.parse().expect("abci_query path conversion failed");
+        println!("{path}");
         let req = self.rpc.abci_query(Some(path), data, None, false);
         let res = self.block_on(req)?;
         Ok(res)
