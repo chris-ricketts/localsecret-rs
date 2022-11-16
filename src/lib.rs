@@ -59,9 +59,9 @@ impl LocalSecret {
     }
 
     /// (Conditionally) Spawn a docker container, connect the RPC client and pass it to the session function.
-    pub fn run<F>(&self, f: F) -> Result<()>
+    pub fn run<F, T>(&self, f: F) -> Result<T>
     where
-        F: FnOnce(&Client) -> Result<()> + std::panic::UnwindSafe,
+        F: FnOnce(&Client) -> Result<T> + std::panic::UnwindSafe,
     {
         if self.spawn_docker {
             docker::docker_run(f)

@@ -1,8 +1,8 @@
 use crate::{client::Client, consts, Result};
 
-pub fn docker_run<F>(f: F) -> Result<()>
+pub fn docker_run<F, T>(f: F) -> Result<T>
 where
-    F: FnOnce(&Client) -> Result<()> + std::panic::UnwindSafe,
+    F: FnOnce(&Client) -> Result<T> + std::panic::UnwindSafe,
 {
     let docker_args = [
         "-d",
