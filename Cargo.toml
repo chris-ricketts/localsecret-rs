@@ -9,9 +9,9 @@ doctest = false
 
 [dependencies]
 cosmwasm-std = { version = "0.10", package = "secret-cosmwasm-std" }
-prost = "0.10"
+prost = "0.11"
 # TODO: ideally remove this dependency for something more lightweight
-cosmrs = { git = "https://github.com/chris-ricketts/cosmos-rust", branch = "secret", features = [
+cosmrs = { git = "https://github.com/chris-ricketts/cosmos-rust", rev = "d514734", features = [
   "bip32",
   "secret-cosmwasm",
   "dev",

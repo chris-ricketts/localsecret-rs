@@ -1,6 +1,7 @@
 use cosmrs::{
+    proto::traits::TypeUrl,
     rpc::endpoint::broadcast::tx_commit::Response as BroadcastResponse,
-    tx::{Body, Fee, Msg, MsgProto, SignDoc, SignerInfo},
+    tx::{Body, Fee, Msg, SignDoc, SignerInfo},
 };
 use prost::Message;
 
@@ -148,9 +149,9 @@ pub mod builder {
     }
 
     impl<'a, M, R, From> Tx<'a, Execute<M, R>, From> {
-        pub fn send_uscrt(mut self, amount: u64) -> Self {
+        pub fn send_uscrt(mut self, amount: u128) -> Self {
             if let Some(coin) = self.kind.sent_funds.first_mut() {
-                coin.amount += amount.into();
+                coin.amount += amount;
                 return self;
             }
 
@@ -422,7 +423,7 @@ fn broadcast_tx_response(msg_type: &str, bcast_res: BroadcastResponse) -> Broadc
         .data
         .and_then(|data| {
             use cosmrs::proto::cosmos::base::abci::v1beta1::TxMsgData;
-            TxMsgData::decode(data.as_bytes())
+            TxMsgData::decode(data.value().as_slice())
                 .expect("unexpected data in response")
                 .data
                 .into_iter()
